@@ -1,0 +1,719 @@
+#######################################################
+Ingress Notes
+######################################################
+
+In production, Ingress = HTTP/HTTPS entry point to your Kubernetes cluster.
+
+Typical flow in companies:
+
+User → DNS → LoadBalancer (ALB / NGINX) → Ingress → Service → Pod
+
+
+Ingress does NOT expose pods directly. It routes traffic based on hostnames and paths.
+
+1️⃣ Host-based Ingress (MOST COMMON in companies)
+Use case
+
+Different applications on different domains.
+
+Real example
+
+api.company.com      → backend API
+app.company.com      → frontend UI
+grafana.company.com  → monitoring
+
+Ingress YAML (Host-based)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: company-ingress
+  namespace: prod
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.company.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 8080
+
+    - host: app.company.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+
+Why companies prefer this
+
+✅ Clean URLs
+✅ Easy TLS per domain
+✅ Clear ownership per team
+✅ Scales well
+
+2️⃣ Path-based Ingress (Very common for APIs)
+Use case
+
+Single domain, multiple services.
+
+Real example
+
+company.com/api        → backend API
+company.com/auth       → auth service
+company.com/payments   → payment service
+
+Ingress YAML (Path-based)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-ingress
+  namespace: prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: company.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 8080
+
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8080
+
+          - path: /payments
+            pathType: Prefix
+            backend:
+              service:
+                name: payment-service
+                port:
+                  number: 8080
+
+Why companies use this
+
+✅ Single DNS entry
+✅ Easy API gateway style routing
+❌ Path conflicts if badly designed
+
+3️⃣ Host + Path Based (Very realistic production setup)
+
+Real enterprise example
+
+api.company.com/v1     → API v1
+api.company.com/v2     → API v2
+admin.company.com     → Admin UI
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prod-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.company.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: api-v1
+                port:
+                  number: 8080
+
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: api-v2
+                port:
+                  number: 8080
+
+    - host: admin.company.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-ui
+                port:
+                  number: 80
+
+4️⃣ Ingress with TLS (USED IN ALL COMPANIES)
+TLS using cert-manager + Let’s Encrypt
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: secure-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.company.com
+      secretName: app-tls
+  rules:
+    - host: app.company.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+
+
+🔐 This is exactly how companies use HTTPS in Kubernetes
+
+5️⃣ AWS ALB Ingress (Very common in AWS companies)
+
+If company uses EKS + ALB:
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alb-ingress
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  rules:
+    - host: app.company.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+
+What is ACTUALLY used in companies?
+Scenario	Used
+Public websites	Host-based
+Microservices APIs	Path-based
+Multi-tenant apps	Host + Path
+AWS EKS	ALB Ingress
+HTTPS	cert-manager + Let’s Encrypt
+Internal tools	NGINX ingress
+Interview-ready answer (you can say this)
+
+“In real production, we use host-based ingress for frontend and major services, and path-based ingress for APIs. TLS is handled using cert-manager with Let’s Encrypt or cloud-managed certificates. On AWS EKS, we often use ALB Ingress Controller, while on other platforms we use NGINX Ingress.”
+
+If you want, next I can show:
+
+🔹 Ingress vs API Gateway
+
+🔹 How companies do blue-green / canary using ingress
+
+🔹 NGINX annotations that are actually used (timeouts, rate limiting)
+
+Just tell me 👍
+
+hey the examples you provided i got that ,  but i am confusesd what you write inside annotations so pls telle me
+
+Got it 👍
+You already understand host-based & path-based Ingress, so now I’ll only focus on annotations and explain what goes inside them and why companies use them — in a very practical way.
+
+1️⃣ What are Ingress annotations?
+
+Ingress annotations are controller-specific instructions.
+Kubernetes itself doesn’t understand how to do TLS, rewrite URLs, rate limit, auth, etc.
+
+👉 The Ingress Controller (NGINX, ALB, Traefik, etc.) reads annotations and configures itself.
+
+Think of annotations as:
+
+“Hey Ingress Controller, please behave like THIS”
+
+2️⃣ Most common controller in companies: NGINX Ingress
+
+I’ll explain annotations assuming NGINX Ingress, because:
+
+70–80% companies use it
+
+EKS/GKE/AKS all support it
+
+Interview favorite
+
+3️⃣ Common NGINX annotations (REAL usage)
+🔹 1. Rewrite URL (VERY COMMON)
+annotations:
+  nginx.ingress.kubernetes.io/rewrite-target: /
+
+Why?
+
+Suppose user hits:
+
+/app/login
+
+
+But your backend app only understands:
+
+/login
+
+
+➡ This annotation rewrites the path before forwarding.
+
+Used in companies when:
+
+Legacy apps
+
+Monolith split into microservices
+
+React frontend → API backend mismatch
+
+🔹 2. SSL Redirect (Force HTTPS)
+annotations:
+  nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+Why?
+
+Redirects http → https
+
+Mandatory in production
+
+Real use:
+
+Banking
+
+Fintech
+
+Any prod workload
+
+🔹 3. Ingress Class (VERY IMPORTANT)
+annotations:
+  kubernetes.io/ingress.class: nginx
+
+Why?
+
+If multiple ingress controllers exist:
+
+nginx
+
+alb
+
+traefik
+
+This tells Kubernetes:
+
+“This Ingress belongs to NGINX”
+
+🔹 4. Proxy Body Size (File Uploads)
+annotations:
+  nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+Why?
+
+NGINX default upload limit = 1MB
+
+If users upload:
+
+images
+
+CSV
+
+PDFs
+
+➡ requests fail without this
+
+Real use:
+
+Resume upload
+
+Invoice upload
+
+Media upload
+
+🔹 5. Read / Connect Timeout (Production MUST)
+annotations:
+  nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+  nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+
+Why?
+
+Backend APIs may be slow
+
+Avoid 504 Gateway Timeout
+
+Real use:
+
+Reports
+
+Batch jobs
+
+DB-heavy APIs
+
+🔹 6. Rate Limiting (Security)
+annotations:
+  nginx.ingress.kubernetes.io/limit-rps: "10"
+
+Why?
+
+Limits requests per second per IP.
+
+Used to protect against:
+
+Brute force
+
+DoS
+
+API abuse
+
+🔹 7. Enable CORS (Frontend ↔ Backend)
+annotations:
+  nginx.ingress.kubernetes.io/enable-cors: "true"
+  nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+
+Why?
+
+Browser blocks cross-domain calls.
+
+Used when:
+
+React app on frontend.company.com
+
+API on api.company.com
+
+🔹 8. Basic Auth (Internal Tools)
+annotations:
+  nginx.ingress.kubernetes.io/auth-type: basic
+  nginx.ingress.kubernetes.io/auth-secret: basic-auth
+  nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+
+Why?
+
+Protect:
+
+Jenkins UI
+
+Admin panels
+
+Internal dashboards
+
+Very common in companies
+
+4️⃣ FULL real-world example (Host + Path + Annotations)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  rules:
+  - host: app.company.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 8080
+
+5️⃣ How companies decide annotations?
+Requirement	Annotation used
+HTTPS only	ssl-redirect
+Different URL structure	rewrite-target
+Large uploads	proxy-body-size
+Slow backend	proxy-read-timeout
+Security	limit-rps
+Frontend ↔ Backend	enable-cors
+Internal tools	auth-type
+6️⃣ Interview-ready explanation (VERY IMPORTANT)
+
+If interviewer asks:
+
+“What are annotations in Ingress?”
+
+👉 Say this:
+
+Annotations are controller-specific configurations that tell the Ingress controller how to handle traffic, such as SSL redirect, path rewrite, rate limiting, authentication, and timeouts. Kubernetes itself does not implement these features; the ingress controller does.
+
+🔥 This answer sounds real-world & senior-level
+
+If you want next:
+
+AWS ALB ingress annotations
+
+TLS + cert-manager
+
+NGINX vs ALB ingress comparison
+
+Interview questions on Ingress
+
+Just tell me 👍
+
+i got it now .. but a bit more elaborate give example
+
+Got it 👍
+I’ll explain Ingress annotations clearly, step-by-step, with real company–style examples, and why they are written.
+
+Big picture first (very important)
+
+An Ingress resource has two parts:
+
+Rules section
+
+host / path
+
+which service to send traffic to
+
+Annotations
+
+instructions to the Ingress Controller
+
+how TLS works
+
+redirects
+
+auth
+
+rate-limit
+
+rewrites
+
+headers
+
+WAF
+
+timeouts
+
+👉 Ingress rules = WHERE traffic goes
+👉 Annotations = HOW traffic is handled
+
+Who reads annotations?
+
+Annotations are NOT Kubernetes native logic.
+
+They are read by:
+
+NGINX Ingress Controller
+
+AWS ALB Ingress Controller
+
+Traefik
+
+HAProxy
+
+Each controller has its own annotation set.
+
+Below examples are NGINX Ingress (most common in companies).
+
+1️⃣ Minimal production ingress (no annotations)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: app.company.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app-service
+            port:
+              number: 80
+
+
+➡ Works, but:
+
+no TLS
+
+no redirects
+
+no security
+
+no tuning
+
+Not production-grade.
+
+2️⃣ Force HTTP → HTTPS (very common)
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+What this does
+
+If user hits http://app.company.com
+
+NGINX responds:
+
+301 Redirect → https://app.company.com
+
+Why companies use this
+
+✔ Security
+✔ Compliance
+✔ Avoid plaintext traffic
+
+3️⃣ TLS + cert-manager (real-world standard)
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+spec:
+  tls:
+  - hosts:
+    - app.company.com
+    secretName: app-tls
+
+What happens internally
+
+cert-manager sees annotation
+
+Requests certificate from Let’s Encrypt
+
+Stores cert in app-tls secret
+
+NGINX uses it automatically
+
+➡ No manual cert handling
+➡ Auto-renew every 90 days
+
+4️⃣ Path rewrite (VERY common confusion)
+Problem
+
+Your backend app serves /
+But ingress exposes /api
+
+Annotation
+annotations:
+  nginx.ingress.kubernetes.io/rewrite-target: /
+
+Rule
+paths:
+- path: /api
+  pathType: Prefix
+
+Result
+Request	Backend sees
+/api/users	/users
+/api/health	/health
+
+➡ Used heavily in microservices gateways
+
+5️⃣ Increase timeout (production critical)
+annotations:
+  nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+  nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+
+Why?
+
+Default NGINX timeout = 60 seconds
+
+If:
+
+long API
+
+DB migration
+
+report generation
+
+➡ Request fails without this
+
+6️⃣ Rate limiting (DDoS protection)
+annotations:
+  nginx.ingress.kubernetes.io/limit-rps: "10"
+  nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+
+Meaning
+
+10 requests/sec per IP
+
+small burst allowed
+
+Used for
+
+✔ Login APIs
+✔ Public endpoints
+✔ Prevent abuse
+
+7️⃣ Basic Auth (internal tools)
+annotations:
+  nginx.ingress.kubernetes.io/auth-type: basic
+  nginx.ingress.kubernetes.io/auth-secret: basic-auth
+  nginx.ingress.kubernetes.io/auth-realm: "Restricted Area"
+
+Used for
+
+Admin dashboards
+
+Internal tools
+
+Non-public apps
+
+8️⃣ Add security headers (real prod)
+annotations:
+  nginx.ingress.kubernetes.io/configuration-snippet: |
+    add_header X-Frame-Options "DENY";
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-XSS-Protection "1; mode=block";
+
+
+✔ Security compliance
+✔ OWASP recommendations
+
+9️⃣ Complete REAL production ingress example
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prod-app-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - app.company.com
+    secretName: app-tls
+  rules:
+  - host: app.company.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: app-service
+            port:
+              number: 8080
